@@ -60,6 +60,18 @@ chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
     }
 });
 
+chrome.tabs.onRemoved.addListener(async () => {
+    if (!spotifyPausedByExtension) return;
+
+    const settings = await getSettings();
+    if (!settings["sp-play-pause"] || !settings["sp-play-yt-stop"]) return;
+
+    const youtubeTabs = await chrome.tabs.query({ url: "*://www.youtube.com/*" });
+    if (youtubeTabs.length > 0) return;
+
+    controlSpotify("play");
+});
+
 async function controlYouTube(action) {
     const tabs = await chrome.tabs.query({ url: "*://www.youtube.com/*" });
 
