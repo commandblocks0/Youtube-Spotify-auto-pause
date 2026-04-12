@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Youtube-Spotify auto pause</title>
+    <link rel="stylesheet" href="popup.css">
+    <script src="popup.js" defer></script>
+</head>
+<body>
+    <div class="container">
+        <div class="help">
+            Parent switches enable their options below.
+        </div>
+
+        <div class="related">
+            <div class="item">
+                <div class="label" title="Master switch for YouTube auto pause/resume rules.">Auto play/pause youtube</div>
+                <div id="yt-play-pause" class="switch" checked>
+                    <div class="dot"></div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="label" title="Resume YouTube when returning to the tab/window.">Play video on focus</div>
+                <div id="yt-focus" class="switch" checked>
+                    <div class="dot"></div>
+                </div>
+            </div>
+
+            <div class="related">
+                <div class="item">
+                    <div class="label" title="Pause YouTube when tab/window loses focus.">Pause video on blur</div>
+                    <div id="yt-blur" class="switch" checked>
+                        <div class="dot"></div>
+                    </div>
+                </div>
+
+                <div class="item">
+                    <div class="label" title="Ignore blur pause while YouTube is fullscreen.">Don't pause in fullscreen</div>
+                    <div id="yt-fullscreen" class="switch" checked>
+                        <div class="dot"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="related">
+            <div class="item">
+                <div class="label" title="Master switch for Spotify auto pause/resume rules.">Auto play/pause spotify</div>
+                <div id="sp-play-pause" class="switch" checked>
+                    <div class="dot"></div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="label" title="Pause Spotify when a YouTube video starts.">Stop spotify when youtube plays</div>
+                <div id="sp-stop-yt-play" class="switch" checked>
+                    <div class="dot"></div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="label" title="Resume Spotify when YouTube pauses, ends, or closes.">Play spotify when youtube stops</div>
+                <div id="sp-play-yt-stop" class="switch" checked>
+                    <div class="dot"></div>
+                </div>
+            </div>
+
+            <div class="related">
+                <div class="item">
+                    <div class="label" title="Autoplay Spotify when opening spotify.com for the first time.">Play music on first open</div>
+                    <div id="sp-first-open" class="switch" checked>
+                        <div class="dot"></div>
+                    </div>
+                </div>
+
+                <div class="item">
+                    <div class="label" title="Only auto-resume Spotify if a headphone-like output is detected.">Require headphones</div>
+                    <div id="sp-headphones" class="switch" checked>
+                        <div class="dot"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="help subtle">
+            Headphone detection depends on browser device visibility and may vary.
+        </div>
+    </div>
+</body>
+</html>
