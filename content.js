@@ -30,6 +30,8 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
 if (isYouTube) {
 	let currentVideo = null;
 	let wasPlayingBeforeBackgroundPause = false;
+	let spotifyPauseRequestedForCurrentPlayback = false;
+	let spotifyResumeRequestedForCurrentStop = false;
 
 	function sendSpotifyMessage(payload) {
 		if (chrome?.runtime?.sendMessage) {
@@ -69,16 +71,45 @@ if (isYouTube) {
 		video.play().catch(() => { });
 	}
 
-	function onVideoPlay() {
+	function requestSpotifyPauseForYouTubePlayback() {
 		if (!settings["sp-play-pause"]) return;
 		if (!settings["sp-stop-yt-play"]) return;
+		if (spotifyPauseRequestedForCurrentPlayback) return;
+
+		spotifyPauseRequestedForCurrentPlayback = true;
+		spotifyResumeRequestedForCurrentStop = false;
 		sendSpotifyMessage({ type: "spotify_pause" });
 	}
 
-	function onVideoPauseOrEnded() {
+	function requestSpotifyResumeForYouTubeStop() {
 		if (!settings["sp-play-pause"]) return;
 		if (!settings["sp-play-yt-stop"]) return;
+		if (spotifyResumeRequestedForCurrentStop) return;
+
+		spotifyResumeRequestedForCurrentStop = true;
+		spotifyPauseRequestedForCurrentPlayback = false;
 		sendSpotifyMessage({ type: "spotify_play" });
+	}
+
+	function syncSpotifyWithCurrentVideoState(video) {
+		if (!video) return;
+		const nearEnd = Number.isFinite(video.duration) && video.duration > 0 && video.currentTime >= video.duration - 0.2;
+		if (!video.paused && !video.ended && !nearEnd) {
+			requestSpotifyPauseForYouTubePlayback();
+			return;
+		}
+
+		if (video.ended || nearEnd) {
+			requestSpotifyResumeForYouTubeStop();
+		}
+	}
+
+	function onVideoPlay() {
+		requestSpotifyPauseForYouTubePlayback();
+	}
+
+	function onVideoPauseOrEnded() {
+		requestSpotifyResumeForYouTubeStop();
 	}
 
 	function attachVideoListeners(video) {
@@ -91,6 +122,8 @@ if (isYouTube) {
 		}
 
 		currentVideo = video;
+		spotifyPauseRequestedForCurrentPlayback = false;
+		spotifyResumeRequestedForCurrentStop = false;
 		currentVideo.addEventListener("play", onVideoPlay);
 		currentVideo.addEventListener("pause", onVideoPauseOrEnded);
 		currentVideo.addEventListener("ended", onVideoPauseOrEnded);
@@ -99,6 +132,7 @@ if (isYouTube) {
 	function initYouTube() {
 		const video = document.querySelector("#movie_player .html5-main-video");
 		attachVideoListeners(video);
+		syncSpotifyWithCurrentVideoState(video);
 	}
 
 	window.addEventListener("blur", () => pauseForBackground(currentVideo));
@@ -121,6 +155,12 @@ if (isYouTube) {
 
 	const observer = new MutationObserver(() => initYouTube());
 	observer.observe(document.body, { childList: true, subtree: true });
+	setInterval(() => syncSpotifyWithCurrentVideoState(currentVideo), 1500);
+	setInterval(() => {
+		if (!currentVideo) return;
+		if (currentVideo.paused) return;
+		sendSpotifyMessage({ type: "yt_active" });
+	}, 1000);
 
 	initYouTube();
 }
@@ -128,7 +168,7 @@ if (isYouTube) {
 if (isSpotify) {
 	let hasPlayed = false;
 	let manualButton = null;
-	let firstOpenRetryStarted = false;
+	let firstOpenRetryInProgress = false;
 
 	function isPlayState(label) {
 		if (!label) return false;
@@ -161,14 +201,20 @@ if (isSpotify) {
 	}
 
 	async function tryPlayWithRetries() {
-		if (firstOpenRetryStarted) return;
-		firstOpenRetryStarted = true;
+		if (firstOpenRetryInProgress) return;
+		if (hasPlayed) return;
+		firstOpenRetryInProgress = true;
 
-		for (let attempt = 0; attempt < 8; attempt += 1) {
+		for (let attempt = 0; attempt < 20; attempt += 1) {
 			const played = await tryPlay();
-			if (played) return;
-			await delay(750);
+			if (played) {
+				firstOpenRetryInProgress = false;
+				return;
+			}
+			await delay(1000);
 		}
+
+		firstOpenRetryInProgress = false;
 	}
 
 	function handleManualToggle(event) {
