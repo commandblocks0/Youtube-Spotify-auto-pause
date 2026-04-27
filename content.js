@@ -169,6 +169,8 @@ if (isSpotify) {
 	let hasPlayed = false;
 	let manualButton = null;
 	let firstOpenRetryInProgress = false;
+	let headphonePlayInterval = null;
+	let headphonePlayCheckInProgress = false;
 
 	function isPlayState(label) {
 		if (!label) return false;
@@ -181,23 +183,84 @@ if (isSpotify) {
 		return new Promise((resolve) => setTimeout(resolve, ms));
 	}
 
-	async function tryPlay() {
+	async function headphonesConnected() {
+		try {
+			const permission = await navigator.permissions?.query?.({ name: "microphone" });
+			if (permission?.state !== "granted") {
+				const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+				stream.getTracks().forEach((track) => track.stop());
+			}
+
+			const devices = await navigator.mediaDevices.enumerateDevices();
+			return devices.some((device) => {
+				return device.kind === "audiooutput" && device.label.toLowerCase().includes("headphone");
+			});
+		} catch {
+			return false;
+		}
+	}
+
+	function stopHeadphonePlayInterval() {
+		if (headphonePlayInterval) {
+			clearInterval(headphonePlayInterval);
+			headphonePlayInterval = null;
+		}
+
+		if (window.__youtubeSpotifyHeadphonePlayInterval) {
+			clearInterval(window.__youtubeSpotifyHeadphonePlayInterval);
+			window.__youtubeSpotifyHeadphonePlayInterval = null;
+		}
+	}
+
+	async function tryPlay(options = {}) {
+		const { requireHeadphones = false } = options;
 		if (hasPlayed) return false;
 		if (!settings["sp-play-pause"]) return false;
 		if (!settings["sp-first-open"]) return false;
+		if (requireHeadphones && !(await headphonesConnected())) return false;
 
 		const btn = document.querySelector('[data-testid="control-button-playpause"]');
 		if (!btn || btn.disabled) return false;
 
 		const label = btn.getAttribute("aria-label");
 		const mediaState = navigator.mediaSession?.playbackState;
+		const alreadyPlaying = mediaState === "playing" || (label && !isPlayState(label));
 		const shouldPlay = mediaState === "paused" || mediaState === "none" || isPlayState(label);
 
+		if (alreadyPlaying) {
+			hasPlayed = true;
+			return true;
+		}
 		if (!shouldPlay) return false;
 
 		btn.click();
-		hasPlayed = true;
-		return true;
+		await delay(400);
+
+		const nextLabel = btn.getAttribute("aria-label");
+		const nextMediaState = navigator.mediaSession?.playbackState;
+		const played = nextMediaState === "playing" || (nextLabel && !isPlayState(nextLabel));
+		if (played) {
+			hasPlayed = true;
+			stopHeadphonePlayInterval();
+			chrome.runtime.sendMessage({ type: "spotify_auto_played" });
+		}
+
+		return played;
+	}
+
+	function startHeadphonePlayInterval() {
+		if (headphonePlayInterval) return;
+
+		headphonePlayInterval = setInterval(async () => {
+			if (headphonePlayCheckInProgress) return;
+			headphonePlayCheckInProgress = true;
+
+			try {
+				await tryPlay({ requireHeadphones: true });
+			} finally {
+				headphonePlayCheckInProgress = false;
+			}
+		}, 100);
 	}
 
 	async function tryPlayWithRetries() {
@@ -219,6 +282,7 @@ if (isSpotify) {
 
 	function handleManualToggle(event) {
 		if (!event.isTrusted) return;
+		stopHeadphonePlayInterval();
 
 		const btn = event.currentTarget;
 		requestAnimationFrame(() => {
@@ -244,6 +308,10 @@ if (isSpotify) {
 		if (!btn) return;
 
 		attachManualListener(btn);
+		if (settings["sp-headphones"]) {
+			startHeadphonePlayInterval();
+			return;
+		}
 		tryPlayWithRetries();
 	}
 
@@ -254,6 +322,10 @@ if (isSpotify) {
 		if (!document.hidden) {
 			initSpotify();
 		}
+	});
+
+	navigator.mediaDevices?.addEventListener?.("devicechange", () => {
+		initSpotify();
 	});
 
 	initSpotify();

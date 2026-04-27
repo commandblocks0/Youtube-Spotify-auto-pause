@@ -1,5 +1,6 @@
 let spotifyPausedByExtension = false;
 let lastYouTubePlayback = 0;
+let spotifyPlayRequestId = 0;
 
 const DEFAULT_SETTINGS = {
     "yt-play-pause": true,
@@ -15,7 +16,6 @@ const DEFAULT_SETTINGS = {
 
 const PLAY_KEYWORDS = ["play", "prehr", "reproduc", "jouer", "spielen", "riproduci", "odtworz"];
 const PAUSE_KEYWORDS = ["pause", "pausa", "stopp", "arrêt", "arrêter", "przerwij", "pozastav"];
-const HEADPHONE_KEYWORDS = ["headphone", "headset", "earbud", "airpods", "buds", "pods", "sluch", "sluchat", "auricular"];
 const YOUTUBE_URL_PATTERNS = ["*://youtube.com/*", "*://*.youtube.com/*"];
 const SPOTIFY_URL_PATTERNS = ["*://open.spotify.com/*"];
 
@@ -106,6 +106,11 @@ chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
 
         case "spotify_manual_toggle":
             spotifyPausedByExtension = false;
+            spotifyPlayRequestId += 1;
+            break;
+
+        case "spotify_auto_played":
+            spotifyPausedByExtension = false;
             break;
     }
 });
@@ -195,17 +200,23 @@ async function wakeSpotifyTabsIfNeeded(tabs, options = {}) {
 async function controlSpotify(action, options = {}) {
     const { allowWake = false, forcePlay = false, preferredTabId = null } = options;
 
+    if (action === "pause") {
+        spotifyPlayRequestId += 1;
+    }
+
     if (action === "play" && !spotifyPausedByExtension && !forcePlay) return;
     const settings = await getSettings();
+    const playRequestId = action === "play" ? spotifyPlayRequestId + 1 : spotifyPlayRequestId;
 
-    if (action === "play" && settings["sp-headphones"]) {
-        const hasHeadphones = await spotifyHasHeadphonesOutput();
-        if (hasHeadphones === false) return;
+    if (action === "play") {
+        spotifyPlayRequestId = playRequestId;
     }
 
     const attempts = action === "play" ? 8 : 2;
 
     for (let attempt = 0; attempt < attempts; attempt += 1) {
+        if (action === "play" && playRequestId !== spotifyPlayRequestId) return;
+
         let tabs = await querySpotifyTabs();
         if (!tabs.length) return;
 
@@ -222,7 +233,7 @@ async function controlSpotify(action, options = {}) {
             try {
                 [injectionResult] = await chrome.scripting.executeScript({
                     target: { tabId: tab.id },
-                    func: (spotifyAction) => {
+                    func: async (spotifyAction, requireHeadphones) => {
                         const PLAY_KEYWORDS = ["play", "prehr", "reproduc", "jouer", "spielen", "riproduci", "odtworz"];
                         const PAUSE_KEYWORDS = ["pause", "pausa", "stopp", "arrêt", "arrêter", "przerwij", "pozastav"];
 
@@ -230,6 +241,60 @@ async function controlSpotify(action, options = {}) {
                             if (!value) return false;
                             const normalized = value.trim().toLowerCase();
                             return keywords.some((keyword) => normalized.includes(keyword));
+                        }
+
+                        async function headphonesConnected() {
+                            try {
+                                const permission = await navigator.permissions?.query?.({ name: "microphone" });
+                                if (permission?.state !== "granted") {
+                                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                                    stream.getTracks().forEach((track) => track.stop());
+                                }
+
+                                const devices = await navigator.mediaDevices.enumerateDevices();
+                                return devices.some((device) => {
+                                    return device.kind === "audiooutput" && device.label.toLowerCase().includes("headphone");
+                                });
+                            } catch {
+                                return false;
+                            }
+                        }
+
+                        function clearHeadphonePlayInterval() {
+                            if (!window.__youtubeSpotifyHeadphonePlayInterval) return;
+                            clearInterval(window.__youtubeSpotifyHeadphonePlayInterval);
+                            window.__youtubeSpotifyHeadphonePlayInterval = null;
+                        }
+
+                        function startHeadphonePlayInterval() {
+                            if (window.__youtubeSpotifyHeadphonePlayInterval) return { label: null, clicked: false, pending: true };
+
+                            window.__youtubeSpotifyHeadphonePlayInterval = setInterval(async () => {
+                                if (window.__youtubeSpotifyHeadphoneCheckInProgress) return;
+                                window.__youtubeSpotifyHeadphoneCheckInProgress = true;
+
+                                try {
+                                    const btn = document.querySelector('[data-testid="control-button-playpause"]');
+                                    if (!btn || btn.disabled) return;
+                                    if (!(await headphonesConnected())) return;
+
+                                    const label = btn.getAttribute("aria-label");
+                                    const mediaState = navigator.mediaSession?.playbackState;
+                                    const shouldPlay = mediaState === "paused" || mediaState === "none" || includesAnyKeyword(label, PLAY_KEYWORDS);
+                                    if (!shouldPlay) {
+                                        clearHeadphonePlayInterval();
+                                        return;
+                                    }
+
+                                    btn.click();
+                                    clearHeadphonePlayInterval();
+                                    chrome.runtime.sendMessage({ type: "spotify_auto_played" });
+                                } finally {
+                                    window.__youtubeSpotifyHeadphoneCheckInProgress = false;
+                                }
+                            }, 100);
+
+                            return { label: null, clicked: false, pending: true };
                         }
 
                         const btn = document.querySelector('[data-testid="control-button-playpause"]');
@@ -241,6 +306,7 @@ async function controlSpotify(action, options = {}) {
                         const inPlayState = mediaState === "paused" || mediaState === "none" || includesAnyKeyword(label, PLAY_KEYWORDS);
 
                         if (spotifyAction === "pause") {
+                            clearHeadphonePlayInterval();
                             if (inPauseState) {
                                 btn.click();
                                 return { label, clicked: true };
@@ -249,16 +315,31 @@ async function controlSpotify(action, options = {}) {
                         }
 
                         if (spotifyAction === "play") {
+                            if (inPauseState) {
+                                clearHeadphonePlayInterval();
+                                return { label, clicked: false, playing: true };
+                            }
+
+                            if (requireHeadphones && !(await headphonesConnected())) {
+                                return startHeadphonePlayInterval();
+                            }
+
                             if (inPlayState) {
                                 btn.click();
-                                return { label, clicked: true };
+                                clearHeadphonePlayInterval();
+                                await new Promise((resolve) => setTimeout(resolve, 400));
+
+                                const nextLabel = btn.getAttribute("aria-label");
+                                const nextMediaState = navigator.mediaSession?.playbackState;
+                                const playing = nextMediaState === "playing" || includesAnyKeyword(nextLabel, PAUSE_KEYWORDS);
+                                return { label: nextLabel, clicked: true, playing };
                             }
                             return { label, clicked: false };
                         }
 
                         return { label, clicked: false };
                     },
-                    args: [action]
+                    args: [action, settings["sp-headphones"]]
                 });
             } catch {
                 continue;
@@ -277,7 +358,7 @@ async function controlSpotify(action, options = {}) {
                     spotifyPausedByExtension = false;
                 }
             } else if (action === "play") {
-                if (result.clicked || isPauseStateLabel(result.label)) {
+                if (result.playing || isPauseStateLabel(result.label)) {
                     spotifyPausedByExtension = false;
                     return;
                 }
@@ -289,45 +370,4 @@ async function controlSpotify(action, options = {}) {
             await delay(800);
         }
     }
-}
-
-async function spotifyHasHeadphonesOutput() {
-    const tabs = await querySpotifyTabs();
-    if (!tabs.length) return null;
-    let sawNoHeadphones = false;
-
-    for (const tab of tabs) {
-        const [injectionResult] = await chrome.scripting.executeScript({
-            target: { tabId: tab.id },
-            func: async (keywords) => {
-                try {
-                    const enumerate = navigator.mediaDevices?.enumerateDevices;
-                    if (!enumerate) return { connected: null };
-
-                    const devices = await enumerate.call(navigator.mediaDevices);
-                    const outputs = devices.filter((device) => device.kind === "audiooutput");
-                    if (!outputs.length) return { connected: null };
-
-                    const namedOutputs = outputs.filter((device) => device.label && device.label.trim().length > 0);
-                    if (!namedOutputs.length) return { connected: null };
-
-                    const connected = namedOutputs.some((device) => {
-                        const label = device.label.toLowerCase();
-                        return keywords.some((keyword) => label.includes(keyword));
-                    });
-
-                    return { connected };
-                } catch {
-                    return { connected: null };
-                }
-            },
-            args: [HEADPHONE_KEYWORDS]
-        });
-
-        const connected = injectionResult?.result?.connected;
-        if (connected === true) return true;
-        if (connected === false) sawNoHeadphones = true;
-    }
-
-    return sawNoHeadphones ? false : null;
 }
