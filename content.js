@@ -32,6 +32,7 @@ if (isYouTube) {
 	let wasPlayingBeforeBackgroundPause = false;
 	let spotifyPauseRequestedForCurrentPlayback = false;
 	let spotifyResumeRequestedForCurrentStop = false;
+	let pauseTimeout = null;
 
 	function sendSpotifyMessage(payload) {
 		if (chrome?.runtime?.sendMessage) {
@@ -54,10 +55,7 @@ if (isYouTube) {
 
 	function pauseForBackground(video) {
 		if (!video || !shouldPauseOnBackground()) return;
-		if (video.paused) {
-			wasPlayingBeforeBackgroundPause = false;
-			return;
-		}
+		if (video.paused) return;
 
 		wasPlayingBeforeBackgroundPause = true;
 		video.pause();
@@ -93,23 +91,33 @@ if (isYouTube) {
 
 	function syncSpotifyWithCurrentVideoState(video) {
 		if (!video) return;
-		const nearEnd = Number.isFinite(video.duration) && video.duration > 0 && video.currentTime >= video.duration - 0.2;
-		if (!video.paused && !video.ended && !nearEnd) {
+		if (!video.paused) {
 			requestSpotifyPauseForYouTubePlayback();
 			return;
 		}
 
-		if (video.ended || nearEnd) {
-			requestSpotifyResumeForYouTubeStop();
-		}
+		requestSpotifyResumeForYouTubeStop();
 	}
 
 	function onVideoPlay() {
+		if (pauseTimeout) {
+			clearTimeout(pauseTimeout);
+			pauseTimeout = null;
+		}
 		requestSpotifyPauseForYouTubePlayback();
 	}
 
-	function onVideoPauseOrEnded() {
-		requestSpotifyResumeForYouTubeStop();
+	function onVideoPause() {
+		if (pauseTimeout) {
+			clearTimeout(pauseTimeout);
+		}
+
+		pauseTimeout = setTimeout(() => {
+			if (currentVideo && currentVideo.paused) {
+				requestSpotifyResumeForYouTubeStop();
+			}
+			pauseTimeout = null;
+		}, 400);
 	}
 
 	function attachVideoListeners(video) {
@@ -117,16 +125,19 @@ if (isYouTube) {
 
 		if (currentVideo) {
 			currentVideo.removeEventListener("play", onVideoPlay);
-			currentVideo.removeEventListener("pause", onVideoPauseOrEnded);
-			currentVideo.removeEventListener("ended", onVideoPauseOrEnded);
+			currentVideo.removeEventListener("pause", onVideoPause);
+		}
+
+		if (pauseTimeout) {
+			clearTimeout(pauseTimeout);
+			pauseTimeout = null;
 		}
 
 		currentVideo = video;
 		spotifyPauseRequestedForCurrentPlayback = false;
 		spotifyResumeRequestedForCurrentStop = false;
 		currentVideo.addEventListener("play", onVideoPlay);
-		currentVideo.addEventListener("pause", onVideoPauseOrEnded);
-		currentVideo.addEventListener("ended", onVideoPauseOrEnded);
+		currentVideo.addEventListener("pause", onVideoPause);
 	}
 
 	function initYouTube() {

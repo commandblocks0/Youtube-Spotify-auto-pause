@@ -61,11 +61,11 @@ async function querySpotifyTabs() {
 }
 
 async function maybeResumeSpotifyAfterYouTubeGone() {
-    if (!spotifyPausedByExtension) return;
-
     const settings = await getSettings();
     if (!settings["sp-play-pause"] || !settings["sp-play-yt-stop"]) return;
-    if (Date.now() - lastYouTubePlayback < 2000) return;
+
+    const ytTabs = await queryYouTubeTabs();
+    if (ytTabs.length > 0) return;
 
     controlSpotify("play", { allowWake: true });
 }
@@ -204,7 +204,6 @@ async function controlSpotify(action, options = {}) {
         spotifyPlayRequestId += 1;
     }
 
-    if (action === "play" && !spotifyPausedByExtension && !forcePlay) return;
     const settings = await getSettings();
     const playRequestId = action === "play" ? spotifyPlayRequestId + 1 : spotifyPlayRequestId;
 
