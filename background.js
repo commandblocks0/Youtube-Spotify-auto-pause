@@ -77,7 +77,7 @@ async function maybeAutoplaySpotifyOnOpen(tabId) {
     if (!settings["sp-play-pause"] || !settings["sp-first-open"]) return;
 
     spotifyStartupHandledTabIds.add(tabId);
-    controlSpotify("play", { allowWake: true, forcePlay: true, preferredTabId: tabId });
+    controlSpotify("play", { allowWake: true, preferredTabId: tabId });
 }
 
 chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
@@ -169,7 +169,6 @@ function reorderTabsByPreference(tabs, preferredTabId) {
 }
 
 async function wakeSpotifyTabsIfNeeded(tabs, options = {}) {
-    const { activateTab = false } = options;
     let shouldWait = false;
 
     for (const tab of tabs) {
@@ -181,15 +180,6 @@ async function wakeSpotifyTabsIfNeeded(tabs, options = {}) {
         if (tab.status !== "complete") {
             shouldWait = true;
         }
-
-        if (activateTab) {
-            try {
-                await chrome.tabs.update(tab.id, { active: true });
-                await delay(300);
-            } catch {
-                // Best effort: continue even if activation fails.
-            }
-        }
     }
 
     if (shouldWait) {
@@ -198,7 +188,7 @@ async function wakeSpotifyTabsIfNeeded(tabs, options = {}) {
 }
 
 async function controlSpotify(action, options = {}) {
-    const { allowWake = false, forcePlay = false, preferredTabId = null } = options;
+    const { allowWake = false, preferredTabId = null } = options;
 
     if (action === "pause") {
         spotifyPlayRequestId += 1;
@@ -222,7 +212,7 @@ async function controlSpotify(action, options = {}) {
         tabs = reorderTabsByPreference(tabs, preferredTabId);
 
         if (allowWake && attempt === 0) {
-            await wakeSpotifyTabsIfNeeded(tabs, { activateTab: forcePlay });
+            await wakeSpotifyTabsIfNeeded(tabs);
         }
 
         let sawResult = false;
